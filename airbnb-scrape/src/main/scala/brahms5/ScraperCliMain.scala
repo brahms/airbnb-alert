@@ -1,12 +1,20 @@
 package brahms5
 
 import akka.actor.ActorSystem
+import akka.dispatch.Futures
 import brahms5.actor._
 import com.typesafe.scalalogging._
 
-case class ScraperCliArgs(addresses: List[String] = List(),
-                         apiKey: String = null)
+import scala.concurrent.Future
+
 object ScraperCliMain extends App with StrictLogging {
+
+  case class ScraperCliArgs(addresses: List[String] = List(),
+                            apiKey: String = null)
+
+  private [ScraperCliMain] case class AddressWithResult(
+                                                       address: String,
+                                                       result: Either[Throwable, Option[ListingsFetcher.Listing]])
 
   logger.info("Starting up")
 
@@ -38,15 +46,22 @@ object ScraperCliMain extends App with StrictLogging {
       // create our actors
       val httpRequestor = system.actorOf(HttpRequestor.props())
       val reverseGeocoder = system.actorOf(ReverseGeocoder.props(apiKey = args.apiKey, httpRequestor = httpRequestor))
+      val geocoder = system.actorOf(Geocoder.props(apiKey = args.apiKey, httpRequestor = httpRequestor))
       val terminator = system.actorOf(SystemTerminator.props(args.addresses.size))
-      val listingsParser = ListingsParser.router(system,
-        ListingsParser.props(terminator, reverseGeocoder),
+      val listingsFetcher = ListingsFetcher.router(system,
+        ListingsFetcher.props(terminator, reverseGeocoder),
         Runtime.getRuntime.availableProcessors())
-
-      for (address <- args.addresses) {
-        system.actorOf(Fetcher.props(address, terminator, listingsParser))
-      }
-
+      import akka.pattern.ask
+      import scala.concurrent.ExecutionContext.global
+      Futures.sequence[AddressWithResult](args.addresses.toIterable.map(address => {
+        (listingsFetcher ? ListingsFetcher.ListingMsg(address))
+          .asInstanceOf[Future[Either[Throwable, Option[ListingsFetcher.Listing]]]]
+          .map({
+            case Left(t) => AddressWithResult(address, Left(t))
+            case Right(None) => AddressWithResult(address, Right(None)),
+            case Right(Some(listing)) => AddressWithResult(address, Right(Some(listing)))
+          })
+      }), scala.concurrent.ExecutionContext.global)
       system.registerOnTermination({
         logger.info("App is shutting down")
       })

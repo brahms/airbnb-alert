@@ -1,17 +1,13 @@
 package brahms5.actor
 
-import akka.actor.{Props, ActorSystem}
-import akka.http.scaladsl.model.{StatusCodes, HttpRequest}
-import akka.testkit.{TestProbe, TestActorRef, TestKit, ImplicitSender}
-import brahms5.actor
+import akka.actor.ActorSystem
+import akka.http.scaladsl.model.StatusCodes
+import akka.testkit.{ImplicitSender, TestActorRef, TestKit, TestProbe}
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 
-import scala.concurrent.{Future, Await}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 import scala.io.Source
-
-import akka.pattern.ask
-
 class ReverseGeocoderSpec(_system: ActorSystem)
   extends TestKit(_system)
   with ImplicitSender
@@ -36,14 +32,18 @@ class ReverseGeocoderSpec(_system: ActorSystem)
         httpRequestor = httpRequestor.ref
     ))
     val req =  ReverseGeocoder.ReverseGeocodeMsg(
-        lat = 38.83779201970851d,
-        lng = -77.3675359802915d)
-    val response = (rgeocoder ? req).asInstanceOf[Future[Either[ReverseGeocoder.ReverseGeoCodeRsp, Throwable]]]
+        lat = 33d,
+        lng = -100d)
+
+    import akka.pattern.ask
+
+    val response = (rgeocoder ? req).asInstanceOf[Future[Either[Throwable, ReverseGeocoder.ReverseGeoCodeRsp]]]
     httpRequestor.expectMsgType[HttpRequestor.RequestString].request.uri.toString should (include (s"${req.lat},${req.lng}"))
     httpRequestor.reply(HttpRequestor.Response[String](code = StatusCodes.OK, body = reverseGeocodeExampleJson))
     response shouldBe 'isCompleted
     response.value.get.get should matchPattern {
-      case Left(ReverseGeocoder.ReverseGeoCodeRsp("5091 Brentwood Farm Dr, Fairfax, VA 22030, USA")) =>
+      case Right(ReverseGeocoder.ReverseGeoCodeRsp(
+        Seq("277 Bedford Avenue, Brooklyn, NY 11211, USA"))) =>
     }
   }
 }
