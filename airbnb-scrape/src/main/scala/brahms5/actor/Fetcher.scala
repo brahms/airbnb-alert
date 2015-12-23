@@ -9,14 +9,14 @@ import com.typesafe.scalalogging.LazyLogging
 
 object Fetcher {
   def props(address: String,
-            terminator: SystemTerminator,
-            parser: ListingsParser) =
+            terminator: ActorRef,
+            parser: ActorRef) =
     Props(new Fetcher(address, terminator, parser))
 }
 
 class Fetcher(address: String,
-              terminator: SystemTerminator,
-              parser: ListingsParser) extends Actor
+              terminator: ActorRef,
+              parser: ActorRef) extends Actor
   with ImplicitMaterializer
   with LazyLogging {
 
@@ -38,10 +38,10 @@ class Fetcher(address: String,
       for (body <- entity.dataBytes.runFold(ByteString(""))((oldBs, newBs) => oldBs.concat(newBs))) {
         val bodyAsString = body.decodeString("UTF-8")
         logger.info(s"Got response body ${bodyAsString.length}")
-        parser.parse(address, bodyAsString)
+        parser ! ListingsParser.Parse(address, bodyAsString)
       }
     case HttpResponse(code, _, _, _) =>
       logger.warn(s"Request failed for $url, response code is $code")
-      terminator.workFinished(address)
+      terminator ! SystemTerminator.WorkFailed(address)
   }
 }

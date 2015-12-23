@@ -1,50 +1,49 @@
 package brahms5.actor
 
-import akka.actor.{TypedActor, TypedProps}
-import akka.http.scaladsl.Http
+import akka.actor._
 import akka.http.scaladsl.model._
-import akka.stream.ActorMaterializer
-import akka.util.ByteString
-import brahms5.actor.ReverseGeocoder.Result
 import com.typesafe.scalalogging.LazyLogging
-import spray.json.JsonParser
+import spray.json._
 
 import scala.concurrent.Future
 
 object ReverseGeocoder {
-  case class Result(address: String = "")
+  case class ReverseGeocodeMsg(lat: Double, Lng: Double)
+  case class ReverseGeoCodeRsp(address: String)
+  def props(apiKey: String, httpRequestor: ActorRef) =
+    Props[ReverseGeocoder](new ReverseGeocoder(apiKey, httpRequestor))
 
-  def props(apiKey: String) =
-    TypedProps(classOf[ReverseGeocoder], new ReverseGeocoderImpl(apiKey))
-}
-trait ReverseGeocoder {
-  def reverseGeocode(lat: Double, lng: Double): Future[ReverseGeocoder.Result]
-}
-class ReverseGeocoderImpl(apiKey: String) extends ReverseGeocoder
-  with LazyLogging {
+  private [ReverseGeocoder] case class GMapAddressComponent(longName: String, shortName: String, types: Seq[String])
+  private [ReverseGeocoder] case class GMapResult(addressComponent: Seq[GMapAddressComponent], formattedAddress: String, types: Seq[String])
+  private [ReverseGeocoder] case class GMapResponse(results: Seq[GMapResult], status: String)
+  private [ReverseGeocoder] object ResponseProtocol extends DefaultJsonProtocol {
+    implicit val addressFormat = jsonFormat3(GMapAddressComponent)
+    implicit val resultFormat = jsonFormat3(GMapResult)
+    implicit val responseFormat = jsonFormat2(GMapResponse)
 
-  val context = TypedActor.context
+  }
+}
+
+class ReverseGeocoder(apiKey: String, httpRequestor: ActorRef) extends Actor
+  with LazyLogging
+  with Implicit30MinuteTimeout {
+  import ReverseGeocoder._
+  import ResponseProtocol._
   import context.dispatcher
-  implicit val materializer = ActorMaterializer(None)(context)
-
-  val http = Http(context.system)
-
-  override def reverseGeocode(lat: Double, lng: Double): Future[ReverseGeocoder.Result] = {
-    val url = s"https://maps.googleapis.com" +
-      s"/maps/api/place/nearbysearch/json" +
-      s"?key=$apiKey" +
-      s"&location=$lat,$lng" +
-      s"&radius=100"
-    http.singleRequest(HttpRequest(uri = url)).flatMap({
-      case HttpResponse(StatusCodes.OK, headers, entity, _) =>
-        entity.dataBytes.runFold(ByteString(""))((oldBs, newBs) => oldBs.concat(newBs)).map(bs => {
-          val bodyAsString = bs.decodeString("UTF-8")
-          logger.info(s"Got response body ${bodyAsString}")
-          ReverseGeocoder.Result("")
-        })
-      case HttpResponse(code, _, _ , _) =>
-        logger.warn(s"Request failed for $url, code: $code")
-        Future.failed[ReverseGeocoder.Result](new Exception(s"Request failed for $url, code: $code"))
-    })
+  override def receive: Receive = {
+    case ReverseGeocodeMsg(lat, lng) =>
+      val replyTo = sender()
+      val url = s"https://maps.googleapis.com/maps/api/geocode/json?key=$apiKey&latlng=$lat,$lng"
+      import akka.pattern.ask
+      logger.info(s"Geocoding $lat, $lng with url $url")
+      (httpRequestor ? HttpRequestor.RequestString(HttpRequest(uri = url)))
+        .asInstanceOf[Future[HttpRequestor.Response[String]]].map({
+        case HttpRequestor.Response(StatusCodes.OK, headers, body, _) =>
+          val response = body.parseJson.convertTo[GMapResponse]
+          replyTo ! Left(ReverseGeoCodeRsp(response.results(0).formattedAddress))
+        case HttpRequestor.Response(code, _, _ , _) =>
+          logger.warn(s"Request failed for $url, code: $code")
+          replyTo ! Right(new Exception(s"Request failed for $url, code: $code"))
+      }).onFailure({case t: Throwable => replyTo ! Right(Status.Failure(t))})
   }
 }

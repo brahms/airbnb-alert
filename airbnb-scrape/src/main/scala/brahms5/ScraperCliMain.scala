@@ -1,7 +1,7 @@
 package brahms5
 
 import akka.actor.ActorSystem
-import brahms5.actor.{ReverseGeocoder, ListingsParser, Fetcher, SystemTerminator}
+import brahms5.actor._
 import com.typesafe.scalalogging._
 import akka.actor.TypedActor
 
@@ -34,19 +34,21 @@ object ScraperCliMain extends App with StrictLogging {
     case None => /* nop */
     case Some(args) =>
       logger.info(s"Will scrape air bnb for ${args.addresses.mkString(", ")}")
-      // Create the  actor system
-      val system = TypedActor(ActorSystem("airbnb-scrape"))
-      val reverseGeocoder = system.typedActorOf(ReverseGeocoder.props(apiKey = ""))
-      val terminator = system.typedActorOf(SystemTerminator.props(args.addresses.size))
+      val system = ActorSystem("airbnb-scrape")
+
+      // create our actors
+      val httpRequestor = system.actorOf(HttpRequestor.props())
+      val reverseGeocoder = system.actorOf(ReverseGeocoder.props(apiKey = args.apiKey, httpRequestor = httpRequestor))
+      val terminator = system.actorOf(SystemTerminator.props(args.addresses.size))
       val listingsParser = ListingsParser.router(system,
-        ListingsParser.props(terminator,reverseGeocoder),
+        ListingsParser.props(terminator, reverseGeocoder),
         Runtime.getRuntime.availableProcessors())
 
       for (address <- args.addresses) {
-        system.system.actorOf(Fetcher.props(address, terminator, listingsParser))
+        system.actorOf(Fetcher.props(address, terminator, listingsParser))
       }
 
-      system.system.registerOnTermination({
+      system.registerOnTermination({
         logger.info("App is shutting down")
       })
   }
