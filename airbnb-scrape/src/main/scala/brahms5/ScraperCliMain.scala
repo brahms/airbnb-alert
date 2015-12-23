@@ -3,7 +3,6 @@ package brahms5
 import akka.actor.ActorSystem
 import brahms5.actor._
 import com.typesafe.scalalogging._
-import akka.actor.TypedActor
 
 case class ScraperCliArgs(addresses: List[String] = List(),
                          apiKey: String = null)

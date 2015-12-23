@@ -30,6 +30,4 @@ dependencyOverrides ++= Set(
 mainClass in assembly := Some("brahms5.ScraperCliMain")
 assemblyJarName in assembly := "airbnb-scrape.jar"
 
-testOptions += Tests.Argument(TestFrameworks.JUnit, "-v")
-
 fork in run := true
